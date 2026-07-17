@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Box Office — Phase 1 Prototype</title>
+<!--
+  ============================================================
+  THE 1140-a COMPANY — SELF-HOSTED BOX OFFICE, PHASE 1 PROTOTYPE
+  ============================================================
+  Everything configurable lives in CONFIG (top of the <script>).
+  · rows marked confirmed:true are from your transcription (TA 3-15-3, TB 4-15-4).
+    All other rows are PLACEHOLDERS awaiting your Excel chart.
+  · Prices are PLACEHOLDERS. Set them in CONFIG.tiers.
+  · showGaPercentPublic toggles the public %-sold bar on mad-grab tiers
+    (set false to run the no-FOMO play).
+  · Payment buttons are stubs; Stripe + PayPal wiring is Phase 2.
+  · No data persists — this file is UI + logic only. Phase 2 adds the
+    Worker/D1 backend that makes holds and sales real.
+  ============================================================
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@600;800&family=Archivo:wght@400;500;600&family=Spline+Sans+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#171a2b;        /* auditorium dark */
+    --ink-2:#20243a;      /* raised panel */
+    --line:#31364f;
+    --bone:#d8d3c5;       /* available seats, body text */
+    --dim:#8d8fa3;        /* secondary text */
+    --glow:#f5b445;       /* tungsten amber — selection & CTA */
+    --vip:#e6c069;        /* gilt ring for VIP */
+    --sold:#41465e;       /* receded, spoken-for */
+    --stock:#f4efe2;      /* ticket-stock cream (the stub) */
+    --stock-ink:#2a2417;
+    --danger:#e2694f;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--ink);color:var(--bone);font-family:'Archivo',sans-serif;font-size:15px;line-height:1.5}
+  ::selection{background:var(--glow);color:var(--ink)}
+
+  .wrap{max-width:1120px;margin:0 auto;padding:20px 16px 96px}
+
+  /* ---------- header ---------- */
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 20px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:20px}
+  .org{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  h1{font-family:'Big Shoulders',sans-serif;font-weight:800;font-size:clamp(34px,6vw,58px);letter-spacing:.02em;line-height:.95;color:#fff}
+  h1 .amp{color:var(--glow)}
+  .when{font-family:'Spline Sans Mono',monospace;font-size:12.5px;color:var(--dim)}
+  .head-left{flex:1 1 320px;min-width:260px}
+  .head-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin-left:auto}
+  .chip{font-family:'Spline Sans Mono',monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);border-radius:999px;padding:4px 10px;color:var(--dim)}
+  .chip.warn{border-color:#6b5320;color:var(--glow)}
+
+  .switch{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12px;color:var(--dim)}
+  .switch input{appearance:none;width:34px;height:18px;border-radius:999px;background:var(--line);position:relative;cursor:pointer;transition:background .15s;flex:none}
+  .switch input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--bone);transition:transform .15s}
+  .switch input:checked{background:var(--glow)}
+  .switch input:checked::after{transform:translateX(16px);background:var(--ink)}
+
+  /* ---------- organiser strip ---------- */
+  #orgStrip{display:none;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 20px;padding:12px;border:1px dashed #6b5320;border-radius:var(--radius);background:rgba(245,180,69,.04)}
+  #orgStrip.on{display:grid}
+  .stat b{display:block;font-family:'Spline Sans Mono',monospace;font-size:17px;color:var(--glow)}
+  .stat span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+
+  /* ---------- layout ---------- */
+  .cols{display:grid;grid-template-columns:1fr 320px;gap:24px;align-items:start}
+  @media(max-width:960px){.cols{grid-template-columns:1fr}}
+
+  section h2{font-family:'Big Shoulders',sans-serif;font-weight:600;font-size:22px;letter-spacing:.04em;text-transform:uppercase;color:#fff;margin-bottom:4px}
+  .sub{font-size:13px;color:var(--dim);margin-bottom:14px}
+
+  /* ---------- seat map ---------- */
+  .map-card{background:var(--ink-2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 8px 10px}
+  .map-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .map-scroll svg{display:block;min-width:560px;width:100%;height:auto}
+  .seat{cursor:pointer;transition:opacity .12s}
+  .seat.sold{cursor:not-allowed}
+  .seat:focus{outline:none}
+  .seat:focus-visible circle{stroke:#fff;stroke-width:2}
+  @media(prefers-reduced-motion:no-preference){
+    .seat.sel circle{animation:pulse 1.6s ease-in-out infinite}
+    @keyframes pulse{50%{opacity:.75}}
+  }
+  .legend{display:flex;flex-wrap:wrap;gap:14px;padding:12px 10px 4px;font-size:12px;color:var(--dim)}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+
+  /* ---------- GA tiers ---------- */
+  .tiers{margin-top:24px;display:grid;gap:14px}
+  .tier{background:var(--ink-2);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .tier.dashed{border-style:dashed;opacity:.75}
+  .tier-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
+  .tier-top h3{font-family:'Big Shoulders',sans-serif;font-weight:600;font-size:20px;letter-spacing:.04em;color:#fff}
+  .price{font-family:'Spline Sans Mono',monospace;font-size:15px;color:var(--glow);margin-left:auto}
+  .tier-note{font-size:12.5px;color:var(--dim);margin-top:2px}
+  .bar{height:7px;border-radius:999px;background:var(--line);margin:12px 0 6px;overflow:hidden}
+  .bar b{display:block;height:100%;background:linear-gradient(90deg,#b47f2b,var(--glow));border-radius:999px}
+  .bar-label{font-family:'Spline Sans Mono',monospace;font-size:11.5px;color:var(--dim)}
+  .stepper{display:flex;align-items:center;gap:12px;margin-top:12px}
+  .stepper button{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--bone);font-size:18px;cursor:pointer}
+  .stepper button:hover:not(:disabled){border-color:var(--glow);color:var(--glow)}
+  .stepper button:disabled{opacity:.3;cursor:not-allowed}
+  .stepper output{font-family:'Spline Sans Mono',monospace;font-size:16px;min-width:2ch;text-align:center}
+
+  /* ---------- the stub (cart) ---------- */
+  .stub{position:sticky;top:16px;background:var(--stock);color:var(--stock-ink);border-radius:var(--radius);padding:18px 18px 16px 26px;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+  .stub::before{content:"";position:absolute;left:11px;top:10px;bottom:10px;border-left:2px dashed rgba(42,36,23,.35)}
+  .stub::after{content:"";position:absolute;left:-8px;top:50%;width:16px;height:16px;border-radius:50%;background:var(--ink);transform:translateY(-50%)}
+  .stub h2{color:var(--stock-ink);font-size:20px}
+  .stub .sub{color:#6f6552;margin-bottom:10px}
+  .stub ul{list-style:none;font-family:'Spline Sans Mono',monospace;font-size:13px;max-height:190px;overflow:auto;margin-bottom:8px}
+  .stub li{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dotted rgba(42,36,23,.2)}
+  .stub li button{border:none;background:none;color:#a04b32;cursor:pointer;font-size:13px}
+  .empty{font-size:13px;color:#6f6552;padding:14px 0}
+  .totals{font-family:'Spline Sans Mono',monospace;font-size:13.5px;margin-top:6px}
+  .totals div{display:flex;justify-content:space-between;padding:3px 0}
+  .totals .grand{font-size:17px;font-weight:600;border-top:2px solid var(--stock-ink);margin-top:6px;padding-top:8px}
+  .hold{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#6f6552;margin-top:10px}
+  .hold b{font-family:'Spline Sans Mono',monospace;font-size:14px;color:#a04b32}
+  .cta{width:100%;margin-top:12px;padding:13px;border:none;border-radius:8px;background:var(--stock-ink);color:var(--stock);font-family:'Big Shoulders',sans-serif;font-weight:600;font-size:19px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  .cta:disabled{opacity:.35;cursor:not-allowed}
+  .cta:hover:not(:disabled){background:#000}
+
+  /* ---------- payment drawer ---------- */
+  #veil{position:fixed;inset:0;background:rgba(10,12,22,.66);display:none;z-index:40}
+  #drawer{position:fixed;left:0;right:0;bottom:-100%;z-index:50;background:var(--ink-2);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:22px 18px 30px;max-width:680px;margin:0 auto;transition:bottom .25s ease}
+  #drawer.open{bottom:0}
+  #veil.open{display:block}
+  #drawer h2{margin-bottom:2px}
+  .pay-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:16px 0 10px}
+  .pay{position:relative;padding:14px 10px;border:1px solid var(--line);border-radius:10px;background:var(--ink);color:var(--bone);font-family:'Archivo';font-weight:600;font-size:14px;cursor:not-allowed;opacity:.85;text-align:center}
+  .pay small{display:block;font-weight:400;font-size:10.5px;color:var(--dim);margin-top:3px}
+  .rail-note{font-size:12px;color:var(--dim)}
+  .close{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--dim);font-size:22px;cursor:pointer}
+
+  /* ---------- toast ---------- */
+  #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,80px);background:var(--stock);color:var(--stock-ink);padding:10px 18px;border-radius:999px;font-size:13.5px;opacity:0;transition:all .25s;z-index:60;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #toast.show{transform:translate(-50%,0);opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="head-left">
+      <div class="org" id="orgName"></div>
+      <h1 id="evTitle"></h1>
+      <div class="when" id="evWhen"></div>
+    </div>
+    <div class="head-right">
+      <span class="chip warn">Prototype · Phase 1 of 4 · placeholder pricing</span>
+      <label class="switch"><input type="checkbox" id="orgMode"> Organiser view</label>
+    </div>
+  </header>
+
+  <div id="orgStrip" role="region" aria-label="Organiser statistics"></div>
+
+  <div class="cols">
+    <div>
+      <section class="map-card">
+        <h2 style="padding:0 10px">Reserved seating</h2>
+        <p class="sub" style="padding:0 10px" id="mapNote"></p>
+        <div class="map-scroll"><svg id="map" role="group" aria-label="Seat map"></svg></div>
+        <div class="legend">
+          <span><i style="background:var(--bone)"></i>Available</span>
+          <span><i style="background:var(--glow)"></i>Selected</span>
+          <span><i style="background:var(--sold)"></i>Sold</span>
+          <span><i style="background:var(--bone);box-shadow:0 0 0 2px var(--vip)"></i>VIP row</span>
+        </div>
+      </section>
+
+      <section class="tiers" id="tiers"></section>
+    </div>
+
+    <aside class="stub" aria-label="Your order">
+      <h2>Your stub</h2>
+      <p class="sub">Seats are held while you check out.</p>
+      <ul id="cartList"></ul>
+      <div class="empty" id="cartEmpty">Nothing selected yet — tap a seat, or grab General Admission below the map.</div>
+      <div class="totals" id="totals"></div>
+      <div class="hold" id="holdRow" hidden><span>Hold expires in</span><b id="holdClock">8:00</b></div>
+      <button class="cta" id="checkoutBtn" disabled>Continue to payment</button>
+    </aside>
+  </div>
+</div>
+
+<div id="veil"></div>
+<div id="drawer" role="dialog" aria-modal="true" aria-label="Payment">
+  <button class="close" id="drawerClose" aria-label="Close">×</button>
+  <h2>Payment</h2>
+  <p class="sub" id="drawerTotal"></p>
+  <div class="pay-grid">
+    <div class="pay">Card<small>Stripe · Phase 2</small></div>
+    <div class="pay">Apple&nbsp;Pay<small>Stripe · Phase 2</small></div>
+    <div class="pay">Google&nbsp;Pay<small>Stripe · Phase 2</small></div>
+    <div class="pay">Cash&nbsp;App&nbsp;Pay<small>Stripe · Phase 2</small></div>
+    <div class="pay">PayPal<small>PayPal SDK · Phase 2</small></div>
+    <div class="pay">Venmo<small>PayPal SDK · Phase 2</small></div>
+  </div>
+  <p class="rail-note">Two integrations cover all six rails: Stripe (left four) and the PayPal JS SDK (right two). Wiring, webhooks and QR ticket delivery arrive in Phase 2.</p>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+/* ============================ CONFIG ============================ */
+const CONFIG = {
+  event: {
+    org: "THE 1140-a COMPANY PRESENTS",
+    title: 'STAND-UP <span class="amp">DOUBLE</span> FEATURE',   // put the billing here once announced
+    when: "SAT 29 AUG 2026 · TILDEN PERFORMING ARTS CENTER · CAPE COD"
+  },
+  currency: "$",
+  holdMinutes: 8,                 // seat-hold window during checkout
+  passFeesToBuyer: false,         // true → shows a service-fee line (display only in Phase 1)
+  serviceFeePerTicket: 1.00,
+  showGaPercentPublic: true,      // false → hides the %-sold bar from buyers (the no-FOMO play)
+  tiers: {
+    vip: { label: "VIP",      price: 69.95 },   // PLACEHOLDER
+    res: { label: "Reserved", price: 45.95 }    // PLACEHOLDER
+  },
+  /* Row shapes are [left, centre, right] seat counts; aisles drawn between groups.
+     confirmed:true = from your transcription. Everything else = placeholder until the Excel lands. */
+  rows: [
+    { name:"TA", tier:"vip", shape:[3,15,3], confirmed:true },
+    { name:"TB", tier:"vip", shape:[4,15,4], confirmed:true },
+    { name:"A", tier:"res", shape:[5,15,5] },
+    { name:"B", tier:"res", shape:[5,15,5] },
+    { name:"C", tier:"res", shape:[5,15,5] },
+    { name:"D", tier:"res", shape:[5,15,5] },
+    { name:"E", tier:"res", shape:[5,15,5] },
+    { name:"F", tier:"res", shape:[5,15,5] },
+    { name:"G", tier:"res", shape:[5,15,5] },
+    { name:"H", tier:"res", shape:[5,15,5] }
+  ],
+  ga: {
+    label: "General Admission — the mad-grab",
+    note: "Unreserved. Doors 7:00 PM; the wicked-early get the pick.",
+    price: 18.88,                 // PLACEHOLDER
+    capacity: 406,
+    sold: 137
+  },
+  addons: [
+    { id:"clambake", label:"Clam-Bake Add-On", price:null, enabled:false,
+      note:"Held pending the sponsor decision — flip enabled:true and set a price when it resolves." }
+  ]
+};
+/* =============================================================== */
+
+/* ---------- deterministic mock sold-seat seeding ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rand = mulberry32(29082026);
+
+/* ---------- state ---------- */
+const seats = [];               // {id,row,num,tier,cx,cy,sold,el}
+const selected = new Set();     // seat ids
+let gaQty = 0;
+let holdTimer = null, holdEndsAt = null;
+
+/* ---------- header ---------- */
+document.getElementById("orgName").textContent = CONFIG.event.org;
+document.getElementById("evTitle").innerHTML  = CONFIG.event.title;
+document.getElementById("evWhen").textContent = CONFIG.event.when;
+
+const confirmedRows = CONFIG.rows.filter(r=>r.confirmed).map(r=>r.name).join(" & ");
+document.getElementById("mapNote").textContent =
+  `Rows ${confirmedRows} match your transcription. Remaining rows are placeholders awaiting the chart — the map redraws itself from CONFIG.`;
+
+/* ---------- build the SVG map ---------- */
+const SEAT_R=9, GAP=26, AISLE=18, ROW_H=30, LABEL_W=30;
+const svg = document.getElementById("map");
+const NS = "http://www.w3.org/2000/svg";
+
+function rowWidth(shape){
+  const n = shape.reduce((a,b)=>a+b,0);
+  return n*GAP + (shape.length-1)*AISLE;
+}
+const maxW = Math.max(...CONFIG.rows.map(r=>rowWidth(r.shape)));
+const VIEW_W = maxW + LABEL_W*2 + 24;
+const STAGE_H = 64;
+const rowsTop = STAGE_H + 34;
+const gaTop = rowsTop + CONFIG.rows.length*ROW_H + 18;
+const VIEW_H = gaTop + 86;
+svg.setAttribute("viewBox", `0 0 ${VIEW_W} ${VIEW_H}`);
+
+function el(name, attrs, parent){
+  const e = document.createElementNS(NS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent||svg).appendChild(e);
+  return e;
+}
+
+/* stage + tungsten wash */
+const defs = el("defs", {});
+const grad = el("radialGradient", {id:"wash", cx:"50%", cy:"0%", r:"85%"}, defs);
+el("stop",{offset:"0%", "stop-color":"#f5b445","stop-opacity":"0.16"},grad);
+el("stop",{offset:"60%","stop-color":"#f5b445","stop-opacity":"0.04"},grad);
+el("stop",{offset:"100%","stop-color":"#f5b445","stop-opacity":"0"},grad);
+el("rect",{x:0,y:0,width:VIEW_W,height:VIEW_H,fill:"url(#wash)"});
+el("path",{d:`M ${VIEW_W*0.16} ${STAGE_H} Q ${VIEW_W/2} ${STAGE_H-46} ${VIEW_W*0.84} ${STAGE_H}`,
+           fill:"none",stroke:"#f5b445","stroke-width":"2","stroke-opacity":"0.8"});
+const stageT = el("text",{x:VIEW_W/2,y:STAGE_H-16,"text-anchor":"middle",fill:"#f5b445",
+  "font-size":"13","letter-spacing":"6"});
+stageT.textContent="STAGE";
+stageT.style.fontFamily="'Spline Sans Mono',monospace";
+
+/* seats */
+CONFIG.rows.forEach((row,ri)=>{
+  const w = rowWidth(row.shape);
+  let x = (VIEW_W - w)/2 + GAP/2;
+  const cy = rowsTop + ri*ROW_H;
+  [ (VIEW_W - w)/2 - 16, (VIEW_W + w)/2 + 16 ].forEach(lx=>{
+    const t = el("text",{x:lx,y:cy+4,"text-anchor":"middle",fill:"#8d8fa3","font-size":"11"});
+    t.textContent = row.name;
+    t.style.fontFamily="'Spline Sans Mono',monospace";
+  });
+  let num = 0;
+  row.shape.forEach((count,gi)=>{
+    for(let i=0;i<count;i++){
+      num++;
+      const id = `${row.name}-${num}`;
+      const soldChance = row.tier==="vip" ? 0.12 : 0.18;
+      const sold = rand() < soldChance;
+      const g = el("g",{class:"seat"+(sold?" sold":""),tabindex:sold?-1:0,role:"button",
+                        "aria-label":`Row ${row.name} seat ${num}${sold?" — sold":""}`});
+      const c = el("circle",{cx:x,cy,r:SEAT_R,fill:sold?"var(--sold)":"var(--bone)"},g);
+      if(row.tier==="vip" && !sold) c.setAttribute("style","stroke:var(--vip);stroke-width:2");
+      const seat = {id,row:row.name,num,tier:row.tier,sold,el:c,g};
+      seats.push(seat);
+      if(!sold){
+        g.addEventListener("click",()=>toggleSeat(seat));
+        g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();toggleSeat(seat);}});
+      } else {
+        const t=el("title",{},g); t.textContent="Sold";
+      }
+      x += GAP;
+    }
+    if(gi < row.shape.length-1) x += AISLE;
+  });
+});
+
+/* GA zone (clicking scrolls to the tier card) */
+const gaW = maxW*0.92, gaX=(VIEW_W-gaW)/2;
+const gaG = el("g",{class:"seat",role:"button",tabindex:0,"aria-label":"General admission area — scroll to tickets"});
+el("rect",{x:gaX,y:gaTop,width:gaW,height:58,rx:10,fill:"none",stroke:"#4a4e63","stroke-dasharray":"6 6"},gaG);
+const gaT1=el("text",{x:VIEW_W/2,y:gaTop+26,"text-anchor":"middle",fill:"#8d8fa3","font-size":"13","letter-spacing":"3"},gaG);
+gaT1.textContent="GENERAL ADMISSION — UNRESERVED";
+gaT1.style.fontFamily="'Spline Sans Mono',monospace";
+const gaT2=el("text",{x:VIEW_W/2,y:gaTop+45,"text-anchor":"middle",fill:"#5c6078","font-size":"11"},gaG);
+gaT2.textContent="tap to add tickets ↓";
+const goGA=()=>document.getElementById("tiers").scrollIntoView({behavior:"smooth"});
+gaG.addEventListener("click",goGA);
+gaG.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();goGA();}});
+
+/* ---------- GA tier + add-on cards ---------- */
+const tiersBox = document.getElementById("tiers");
+function money(n){ return CONFIG.currency + n.toFixed(2); }
+
+const gaPct = Math.round(100*CONFIG.ga.sold/CONFIG.ga.capacity);
+const gaCard = document.createElement("div");
+gaCard.className="tier";
+gaCard.innerHTML = `
+  <div class="tier-top"><h3>${CONFIG.ga.label}</h3><span class="price">${money(CONFIG.ga.price)}</span></div>
+  <div class="tier-note">${CONFIG.ga.note}</div>
+  ${CONFIG.showGaPercentPublic ? `
+    <div class="bar" aria-hidden="true"><b style="width:${gaPct}%"></b></div>
+    <div class="bar-label">${gaPct}% claimed</div>` : ``}
+  <div class="stepper">
+    <button id="gaMinus" aria-label="Remove one">−</button>
+    <output id="gaOut">0</output>
+    <button id="gaPlus" aria-label="Add one">+</button>
+    <span class="tier-note" style="margin:0">tickets</span>
+  </div>`;
+tiersBox.appendChild(gaCard);
+
+CONFIG.addons.forEach(a=>{
+  const d=document.createElement("div");
+  d.className="tier dashed";
+  d.innerHTML=`<div class="tier-top"><h3>${a.label}</h3><span class="price">${a.price?money(a.price):"TBD"}</span></div>
+               <div class="tier-note">${a.note}</div>`;
+  tiersBox.appendChild(d);
+});
+
+document.getElementById("gaPlus").addEventListener("click",()=>{ 
+  if (gaQty < CONFIG.ga.capacity - CONFIG.ga.sold){ gaQty++; render(); }
+});
+document.getElementById("gaMinus").addEventListener("click",()=>{ if(gaQty>0){ gaQty--; render(); } });
+
+/* ---------- selection, cart, hold ---------- */
+function toggleSeat(seat){
+  if (selected.has(seat.id)){
+    selected.delete(seat.id);
+    seat.g.classList.remove("sel");
+    seat.el.setAttribute("fill","var(--bone)");
+  } else {
+    selected.add(seat.id);
+    seat.g.classList.add("sel");
+    seat.el.setAttribute("fill","var(--glow)");
+  }
+  render();
+}
+
+function cartCount(){ return selected.size + gaQty; }
+
+function startOrStopHold(){
+  const active = cartCount() > 0;
+  const holdRow = document.getElementById("holdRow");
+  if (active && !holdTimer){
+    holdEndsAt = Date.now() + CONFIG.holdMinutes*60*1000;
+    holdTimer = setInterval(tick, 500);
+    holdRow.hidden = false;
+    tick();
+  }
+  if (!active && holdTimer){
+    clearInterval(holdTimer); holdTimer=null; holdRow.hidden=true;
+  }
+}
+function tick(){
+  const ms = holdEndsAt - Date.now();
+  if (ms <= 0){
+    clearInterval(holdTimer); holdTimer=null;
+    [...selected].forEach(id=>{
+      const s = seats.find(x=>x.id===id);
+      if (s){ s.g.classList.remove("sel"); s.el.setAttribute("fill","var(--bone)"); }
+    });
+    selected.clear(); gaQty=0;
+    render();
+    toast("Hold expired — seats released back to the house.");
+    return;
+  }
+  const m=Math.floor(ms/60000), s=Math.floor(ms%60000/1000);
+  document.getElementById("holdClock").textContent = `${m}:${String(s).padStart(2,"0")}`;
+}
+
+function render(){
+  const list = document.getElementById("cartList");
+  const empty = document.getElementById("cartEmpty");
+  const totals = document.getElementById("totals");
+  list.innerHTML=""; 
+  let sub = 0, fees = 0;
+
+  [...selected].sort().forEach(id=>{
+    const s = seats.find(x=>x.id===id);
+    const p = CONFIG.tiers[s.tier].price;
+    sub += p;
+    const li=document.createElement("li");
+    li.innerHTML=`<span>${CONFIG.tiers[s.tier].label} · ${s.row}-${s.num}</span>
+                  <span>${money(p)} <button aria-label="Remove ${id}" data-id="${id}">✕</button></span>`;
+    list.appendChild(li);
+  });
+  if (gaQty>0){
+    sub += gaQty*CONFIG.ga.price;
+    const li=document.createElement("li");
+    li.innerHTML=`<span>GA × ${gaQty}</span><span>${money(gaQty*CONFIG.ga.price)}</span>`;
+    list.appendChild(li);
+  }
+  list.querySelectorAll("button[data-id]").forEach(b=>
+    b.addEventListener("click",()=>{ const s=seats.find(x=>x.id===b.dataset.id); if(s) toggleSeat(s); }));
+
+  if (CONFIG.passFeesToBuyer) fees = cartCount()*CONFIG.serviceFeePerTicket;
+
+  empty.style.display = cartCount() ? "none" : "block";
+  totals.innerHTML = cartCount() ? `
+    <div><span>Subtotal</span><span>${money(sub)}</span></div>
+    ${fees ? `<div><span>Service fee</span><span>${money(fees)}</span></div>` : ``}
+    <div class="grand"><span>Total</span><span>${money(sub+fees)}</span></div>` : ``;
+
+  document.getElementById("gaOut").textContent = gaQty;
+  document.getElementById("gaMinus").disabled = gaQty===0;
+  document.getElementById("gaPlus").disabled  = gaQty >= CONFIG.ga.capacity - CONFIG.ga.sold;
+  document.getElementById("checkoutBtn").disabled = cartCount()===0;
+
+  startOrStopHold();
+  renderOrgStrip();
+}
+
+/* ---------- organiser view ---------- */
+function renderOrgStrip(){
+  const box = document.getElementById("orgStrip");
+  if (!document.getElementById("orgMode").checked){ box.classList.remove("on"); return; }
+  box.classList.add("on");
+  const by = t => seats.filter(s=>s.tier===t);
+  const soldBy = t => by(t).filter(s=>s.sold).length;
+  const gross = soldBy("vip")*CONFIG.tiers.vip.price
+              + soldBy("res")*CONFIG.tiers.res.price
+              + CONFIG.ga.sold*CONFIG.ga.price;
+  box.innerHTML = `
+    <div class="stat"><b>${soldBy("vip")} / ${by("vip").length}</b><span>VIP sold</span></div>
+    <div class="stat"><b>${soldBy("res")} / ${by("res").length}</b><span>Reserved sold</span></div>
+    <div class="stat"><b>${CONFIG.ga.sold} / ${CONFIG.ga.capacity}</b><span>GA sold</span></div>
+    <div class="stat"><b>${money(gross)}</b><span>Gross (placeholder prices)</span></div>
+    <div class="stat"><b>${CONFIG.showGaPercentPublic ? "ON" : "OFF"}</b><span>Public GA % bar</span></div>`;
+}
+document.getElementById("orgMode").addEventListener("change",renderOrgStrip);
+
+/* ---------- drawer + toast ---------- */
+const veil=document.getElementById("veil"), drawer=document.getElementById("drawer");
+document.getElementById("checkoutBtn").addEventListener("click",()=>{
+  document.getElementById("drawerTotal").textContent =
+    `${cartCount()} ticket${cartCount()===1?"":"s"} — total ${document.querySelector(".grand span:last-child").textContent}. Your hold keeps counting while you pay.`;
+  veil.classList.add("open"); drawer.classList.add("open");
+});
+function closeDrawer(){ veil.classList.remove("open"); drawer.classList.remove("open"); }
+document.getElementById("drawerClose").addEventListener("click",closeDrawer);
+veil.addEventListener("click",closeDrawer);
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeDrawer(); });
+
+let toastT=null;
+function toast(msg){
+  const t=document.getElementById("toast");
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),3600);
+}
+
+render();
+</script>
+</body>
+</html>
